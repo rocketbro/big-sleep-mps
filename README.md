@@ -83,7 +83,7 @@ $ dream "a pyramid made of ice" --output-dir ~/Documents/my_images
 
 ## Apple Silicon Support
 
-This version of Big Sleep has been updated to work natively on Apple Silicon (M1/M2/M3) Macs using the Metal Performance Shaders (MPS) backend in PyTorch. No external GPU is required to run on Apple Silicon devices.
+This version of Big Sleep has been updated to work natively on Apple Silicon Macs using the Metal Performance Shaders (MPS) backend in PyTorch. No external GPU is required to run on Apple Silicon devices.
 
 When you install big-sleep on an Apple Silicon Mac, the appropriate PyTorch version (2.0+) with MPS support will be automatically installed for you.
 
