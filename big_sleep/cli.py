@@ -1,8 +1,44 @@
 import fire
 import random as rnd
+import sys
+import os
+import platform
+import torch
 from big_sleep import Imagine, version
 from pathlib import Path
 from .version import __version__;
+
+def check_environment():
+    """Check if the environment is properly set up for big-sleep"""
+    print("╔══════════════════════════════════════════════════════╗")
+    print("║                Big Sleep Environment                  ║")
+    print("╚══════════════════════════════════════════════════════╝")
+    
+    # Check if PyTorch is installed
+    if not hasattr(torch, '__version__'):
+        print("❌ ERROR: PyTorch is not properly installed.")
+        print("   Please install PyTorch with: pip install torch torchvision")
+        sys.exit(1)
+    
+    # Check for Apple Silicon specific requirements
+    is_apple_silicon = platform.processor() == 'arm' and platform.system() == 'Darwin'
+    if is_apple_silicon:
+        if not torch.backends.mps.is_available():
+            print("⚠️  Running on Apple Silicon, but MPS is not available.")
+            print("   Performance will be significantly slower on CPU.")
+            print("   Make sure you have PyTorch 2.0+ installed: pip install 'torch>=2.0.0' 'torchvision>=0.15.0'")
+        else:
+            print(f"✅ Using Apple MPS (Metal Performance Shaders) for accelerated processing")
+            print(f"   Hardware: {platform.processor()} - {platform.machine()}")
+    elif torch.cuda.is_available():
+        print(f"✅ Using CUDA with {torch.cuda.get_device_name(0)}")
+        print(f"   CUDA version: {torch.version.cuda}")
+    else:
+        print("⚠️  No GPU detected. Running on CPU will be very slow.")
+    
+    print(f"• PyTorch version: {torch.__version__}")
+    print(f"• Python version: {platform.python_version()}")
+    print("────────────────────────────────────────────────────────")
 
 
 def train(
@@ -26,18 +62,41 @@ def train(
     torch_deterministic = False,
     max_classes = None,
     class_temperature = 2.,
-    save_best = False,
+    save_best = True,  # Changed to True to save best result by default
     experimental_resample = False,
     ema_decay = 0.5,
-    num_cutouts = 128,
-    center_bias = False,
-    larger_model = False
+    num_cutouts = 96,  # Reduced from 128 for better performance
+    center_bias = False,  # Matching original default
+    larger_model = False,
+    output_dir = None,
+    fast = False,  # New parameter for quickly generating images
+    debug = False   # New parameter to enable debug output
 ):
     print(f'Starting up... v{__version__}')
 
     if random:
         seed = rnd.randint(0, 1e6)
+        
+    # Handle output directory
+    if output_dir:
+        # Create the output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+        print(f"Images will be saved to: {os.path.abspath(output_dir)}")
 
+    # Apply fast mode settings if enabled
+    if fast:
+        epochs = 5
+        iterations = 500
+        num_cutouts = 64
+        print("⚡ Fast mode enabled - using reduced settings for quicker generation")
+        
+    # Set the debug flag in the big_sleep module
+    import big_sleep.big_sleep
+    big_sleep.big_sleep.DEBUG = debug
+    
+    if debug:
+        print("🔍 Debug mode enabled - verbose output will be shown")
+        
     imagine = Imagine(
         text=text,
         img=img,
@@ -62,7 +121,8 @@ def train(
         ema_decay = ema_decay,
         num_cutouts = num_cutouts,
         center_bias = center_bias,
-        larger_clip = larger_model
+        larger_clip = larger_model,
+        output_dir = output_dir
     )
 
     if not overwrite and imagine.filename.exists():
@@ -71,6 +131,17 @@ def train(
             exit()
 
     imagine()
+    
+    # Print completion message
+    print("\n╔════════════════════════════════════════════════════╗")
+    print("║               Generation Complete!                  ║") 
+    print("╚════════════════════════════════════════════════════╝")
+    abs_path = os.path.abspath(str(imagine.filename))
+    print(f"Image saved to: {abs_path}")
+    print("────────────────────────────────────────────────────────")
+    
+    # Output directory is now handled by the Imagine class
 
 def main():
+    check_environment()
     fire.Fire(train)

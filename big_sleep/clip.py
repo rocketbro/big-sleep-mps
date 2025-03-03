@@ -68,7 +68,7 @@ def available_models() -> List[str]:
     return list(_MODELS.keys())
 
 
-def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu", jit=True):
+def load(name: str, device: Union[str, torch.device] = None, jit=True):
     """Load a CLIP model
 
     Parameters
@@ -77,7 +77,8 @@ def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_a
         A model name listed by `clip.available_models()`, or the path to a model checkpoint containing the state_dict
 
     device : Union[str, torch.device]
-        The device to put the loaded model
+        The device to put the loaded model. If None, it will automatically use MPS on Apple Silicon,
+        CUDA if available, or fall back to CPU.
 
     jit : bool
         Whether to load the optimized JIT model (default) or more hackable non-JIT model.
@@ -90,6 +91,17 @@ def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_a
     preprocess : Callable[[PIL.Image], torch.Tensor]
         A torchvision transform that converts a PIL image into a tensor that the returned model can take as its input
     """
+    # Determine appropriate device if not specified
+    if device is None:
+        import platform
+        is_apple_silicon = platform.processor() == 'arm' and platform.system() == 'Darwin'
+        
+        if is_apple_silicon and torch.backends.mps.is_available():
+            device = "mps"
+        elif torch.cuda.is_available():
+            device = "cuda"
+        else:
+            device = "cpu"
     if name in _MODELS:
         model_path = _download(_MODELS[name])
     elif os.path.isfile(name):

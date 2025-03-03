@@ -559,7 +559,19 @@ class BigGAN(nn.Module):
 
         # Instantiate model.
         model = cls(config, *inputs, **kwargs)
-        state_dict = torch.load(resolved_model_file, map_location='cpu' if not torch.cuda.is_available() else None)
+        
+        # Determine the appropriate device
+        import platform
+        is_apple_silicon = platform.processor() == 'arm' and platform.system() == 'Darwin'
+        
+        if is_apple_silicon and torch.backends.mps.is_available():
+            map_location = 'mps'
+        elif torch.cuda.is_available():
+            map_location = None  # Will load to CUDA
+        else:
+            map_location = 'cpu'
+            
+        state_dict = torch.load(resolved_model_file, map_location=map_location)
         model.load_state_dict(state_dict, strict=False)
         return model
 

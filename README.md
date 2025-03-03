@@ -75,7 +75,61 @@ $ pip install big-sleep
 $ dream "a pyramid made of ice"
 ```
 
-Images will be saved to wherever the command is invoked
+Images will be saved to the current directory. You can specify a different output directory:
+
+```bash
+$ dream "a pyramid made of ice" --output-dir ~/Documents/my_images
+```
+
+## Apple Silicon Support
+
+This version of Big Sleep has been updated to work natively on Apple Silicon (M1/M2/M3) Macs using the Metal Performance Shaders (MPS) backend in PyTorch. No external GPU is required to run on Apple Silicon devices.
+
+When you install big-sleep on an Apple Silicon Mac, the appropriate PyTorch version (2.0+) with MPS support will be automatically installed for you.
+
+Simply run:
+```bash
+$ pip install big-sleep
+$ dream "your prompt"
+```
+
+The code will automatically detect Apple Silicon and use the appropriate device. No additional configuration is needed.
+
+### Fast Mode for Quick Generation
+
+To generate images more quickly (at the cost of some quality), use the `--fast` flag:
+
+```bash
+$ dream "cosmic explosion" --fast
+```
+
+This mode uses fewer iterations and epochs to produce results faster, which is especially helpful for testing prompts or on slower hardware.
+
+For better composition with a central focus point, you can also try the `--center-bias` flag:
+
+```bash
+$ dream "cosmic explosion" --center-bias
+```
+
+### Output Directory
+
+You can specify a directory for saving generated images:
+
+```bash
+$ dream "starry mountain landscape" --output_dir=my_images
+```
+
+The directory will be created if it doesn't exist.
+
+### Debug Mode
+
+If you encounter issues, you can enable debug mode to see detailed information:
+
+```bash
+$ dream "cosmic landscape" --debug
+```
+
+This will print additional information about the generation process and file operations.
 
 ## Advanced
 
@@ -152,10 +206,12 @@ To save the progression of images during training, you simply have to supply the
 $ dream "a bowl of apples next to the fireplace" --save-progress --save-every 100
 ```
 
-Due to the class conditioned nature of the GAN, Big Sleep often steers off the manifold into noise. You can use a flag to save the best high scoring image (per CLIP critic) to `{filepath}.best.png` in your folder.
+Due to the class conditioned nature of the GAN, Big Sleep often steers off the manifold into noise. By default, the program now saves the best high scoring image (per CLIP critic) to `{filepath}.best.png` in your folder. This is often a better result than the final image.
+
+If you don't want this behavior, you can disable it:
 
 ```bash
-$ dream "a room with a view of the ocean" --save-best
+$ dream "a room with a view of the ocean" --save-best=False
 ```
 
 ## Larger model

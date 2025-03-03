@@ -1,4 +1,5 @@
 import os
+import os.path
 import sys
 import subprocess
 import signal
@@ -13,7 +14,27 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from torch.optim import Adam
-from torchvision.utils import save_image
+from torchvision.utils import save_image as _save_image
+
+# Global debug flag (set via CLI)
+DEBUG = False
+
+# Custom save image function with optional debugging
+def save_image(img, fp):
+    try:
+        if DEBUG:
+            print(f"DEBUG SAVE: Saving image to {fp}, shape={img.shape}, dtype={img.dtype}")
+        _save_image(img, fp)
+        if DEBUG:
+            if os.path.exists(fp):
+                print(f"DEBUG SAVE: File exists after save: {fp}, size={os.path.getsize(fp)}")
+            else:
+                print(f"DEBUG SAVE: File does not exist after save: {fp}")
+    except Exception as e:
+        print(f"Error saving image: {str(e)}")
+        if DEBUG:
+            import traceback
+            traceback.print_exc()
 import torchvision.transforms as T
 from PIL import Image
 from tqdm import tqdm, trange
@@ -23,7 +44,31 @@ from big_sleep.resample import resample
 from big_sleep.biggan import BigGAN
 from big_sleep.clip import load, tokenize
 
-assert torch.cuda.is_available(), 'CUDA must be available in order to use Big Sleep'
+# Check if we're running on Apple Silicon
+import platform
+is_apple_silicon = platform.processor() == 'arm' and platform.system() == 'Darwin'
+
+# Use MPS (Metal Performance Shaders) if on Apple Silicon, otherwise require CUDA
+if is_apple_silicon:
+    if torch.backends.mps.is_available():
+        try:
+            # Create a small tensor to test if MPS is working properly
+            test_tensor = torch.zeros(1, device='mps')
+            # If we got here, MPS seems to be working
+            DEVICE = torch.device('mps')
+            print('✅ MPS is functioning properly')
+        except Exception as e:
+            print(f'⚠️ MPS is available but encountered an error: {str(e)}')
+            print('⚠️ Falling back to CPU')
+            DEVICE = torch.device('cpu')
+    else:
+        print('⚠️ MPS is not available on this Apple Silicon device')
+        DEVICE = torch.device('cpu')
+elif torch.cuda.is_available():
+    DEVICE = torch.device('cuda')
+else:
+    DEVICE = torch.device('cpu')
+    print('WARNING: Running on CPU, which will be very slow. Consider using a GPU.')
 
 # graceful keyboard interrupt
 
@@ -217,7 +262,7 @@ class BigSleep(nn.Module):
         self.interpolation_settings = {'mode': 'bilinear', 'align_corners': False} if bilinear else {'mode': 'nearest'}
 
         model_name = 'ViT-B/32' if not larger_clip else 'ViT-L/14'
-        self.perceptor, self.normalize_image = load(model_name, jit = False)
+        self.perceptor, self.normalize_image = load(model_name, device=DEVICE, jit=False)
 
         self.model = Model(
             image_size = image_size,
@@ -319,7 +364,8 @@ class Imagine(nn.Module):
         ema_decay = 0.99,
         num_cutouts = 128,
         center_bias = False,
-        larger_clip = False
+        larger_clip = False,
+        output_dir = None
     ):
         super().__init__()
 
@@ -349,7 +395,7 @@ class Imagine(nn.Module):
             num_cutouts = num_cutouts,
             center_bias = center_bias,
             larger_clip = larger_clip
-        ).cuda()
+        ).to(DEVICE)
 
         self.model = model
 
@@ -373,6 +419,7 @@ class Imagine(nn.Module):
         # create img transform
         self.clip_transform = create_clip_img_transform(224)
         # create starting encoding
+        self.output_dir = output_dir  # Store output_dir as a class property
         self.set_clip_encoding(text=text, img=img, encoding=encoding, text_min=text_min)
     
     @property
@@ -386,7 +433,7 @@ class Imagine(nn.Module):
         self.text = text
         self.img = img
         if encoding is not None:
-            encoding = encoding.cuda()
+            encoding = encoding.to(DEVICE)
         #elif self.create_story:
         #    encoding = self.update_story_encoding(epoch=0, iteration=1)
         elif text is not None and img is not None:
@@ -398,7 +445,7 @@ class Imagine(nn.Module):
         return encoding
 
     def create_text_encoding(self, text):
-        tokenized_text = tokenize(text).cuda()
+        tokenized_text = tokenize(text).to(DEVICE)
         with torch.no_grad():
             text_encoding = self.model.perceptor.encode_text(tokenized_text).detach()
         return text_encoding
@@ -406,7 +453,7 @@ class Imagine(nn.Module):
     def create_img_encoding(self, img):
         if isinstance(img, str):
             img = Image.open(img)
-        normed_img = self.clip_transform(img).unsqueeze(0).cuda()
+        normed_img = self.clip_transform(img).unsqueeze(0).to(DEVICE)
         with torch.no_grad():
             img_encoding = self.model.perceptor.encode_image(normed_img).detach()
         return img_encoding
@@ -435,12 +482,20 @@ class Imagine(nn.Module):
             text_path = datetime.now().strftime("%y%m%d-%H%M%S-") + text_path
 
         self.text_path = text_path
-        self.filename = Path(f'./{text_path}{self.seed_suffix}.png')
+        
+        # Handle output directory if specified
+        if self.output_dir:
+            output_path = Path(self.output_dir)
+            os.makedirs(output_path, exist_ok=True)
+            self.filename = output_path / f'{text_path}{self.seed_suffix}.png'
+        else:
+            self.filename = Path(f'./{text_path}{self.seed_suffix}.png')
+            
         self.encode_max_and_min(text, img=img, encoding=encoding, text_min=text_min) # Tokenize and encode each prompt
 
     def reset(self):
         self.model.reset()
-        self.model = self.model.cuda()
+        self.model = self.model.to(DEVICE)
         self.optimizer = Adam(self.model.model.latents.parameters(), self.lr)
 
     def train_step(self, epoch, i, pbar=None):
@@ -464,20 +519,53 @@ class Imagine(nn.Module):
                 image = self.model.model()[best].cpu()
                 self.model.model.latents.train()
 
-                save_image(image, str(self.filename))
+                # Get absolute path for clarity
+                abs_path = os.path.abspath(str(self.filename))
+                if DEBUG:
+                    print(f"DEBUG: Saving image to path: {abs_path}")
+                
+                # Make sure the directory exists
+                out_dir = os.path.dirname(abs_path)
+                if DEBUG:
+                    print(f"DEBUG: Creating directory: {out_dir}")
+                os.makedirs(out_dir, exist_ok=True)
+                
+                # Debug image info
+                if DEBUG:
+                    print(f"DEBUG: Image shape: {image.shape}, type: {image.dtype}")
+                
+                # Save the image
+                try:
+                    save_image(image, str(self.filename))
+                    if DEBUG:
+                        print(f"DEBUG: Successfully saved image")
+                except Exception as e:
+                    print(f"ERROR: Failed to save image: {str(e)}")
+                    if DEBUG:
+                        import traceback
+                        traceback.print_exc()
+                    
                 if pbar is not None:
                     pbar.update(1)
                 else:
-                    print(f'image updated at "./{str(self.filename)}"')
+                    print(f'Image saved to: {abs_path}')
 
                 if self.save_progress:
                     total_iterations = epoch * self.iterations + i
                     num = total_iterations // self.save_every
-                    save_image(image, Path(f'./{self.text_path}.{num}{self.seed_suffix}.png'))
+                    if self.output_dir:
+                        progress_path = Path(self.output_dir) / f'{self.text_path}.{num}{self.seed_suffix}.png'
+                    else:
+                        progress_path = Path(f'./{self.text_path}.{num}{self.seed_suffix}.png')
+                    save_image(image, progress_path)
 
                 if self.save_best and top_score.item() < self.current_best_score:
                     self.current_best_score = top_score.item()
-                    save_image(image, Path(f'./{self.text_path}{self.seed_suffix}.best.png'))
+                    if self.output_dir:
+                        best_path = Path(self.output_dir) / f'{self.text_path}{self.seed_suffix}.best.png'
+                    else:
+                        best_path = Path(f'./{self.text_path}{self.seed_suffix}.best.png')
+                    save_image(image, best_path)
 
         return out, total_loss
 
@@ -485,9 +573,27 @@ class Imagine(nn.Module):
         penalizing = ""
         if len(self.text_min) > 0:
             penalizing = f'penalizing "{self.text_min}"'
-        print(f'Imagining "{self.text_path}" {penalizing}...')
+        
+        print("\n╔════════════════════════════════════════════════════╗")
+        print(f"║ Generating: \"{self.text_path}\"")
+        if penalizing:
+            print(f"║ {penalizing}")
+        print("╚════════════════════════════════════════════════════╝")
+        
+        # Display configuration
+        print(f"• Image size: {self.model.image_size}x{self.model.image_size}")
+        print(f"• Iterations per epoch: {self.iterations}")
+        print(f"• Total epochs: {self.epochs}")
+        print(f"• Output will be saved to: {self.filename}")
+        print(f"• Device: {DEVICE}")
+        print("────────────────────────────────────────────────────────")
+        
+        # Ensure output directory exists
+        if self.output_dir:
+            os.makedirs(os.path.dirname(str(self.filename)), exist_ok=True)
         
         with torch.no_grad():
+            print("Warming up model...")
             self.model(self.encoded_texts["max"][0]) # one warmup step due to issue with CLIP and CUDA
 
         if self.open_folder:
